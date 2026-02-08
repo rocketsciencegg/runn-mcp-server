@@ -6,11 +6,11 @@ MCP server for Runn — resource planning and utilization tracking.
 
 | Tool | Description |
 |------|-------------|
-| `get_team_utilization` | Get current utilization data for people and teams, with optional team name filter |
-| `get_project_overview` | Get overview of active projects with assignments, timelines, and client info |
-| `get_capacity_forecast` | Get capacity forecast showing who is available and when projects end |
-| `get_person_details` | Get detailed information about a specific person including assignments and skills |
-| `search_resources` | Search for people, projects, or clients by name |
+| `get_team_utilization` | Actual utilization % from timesheet data, resolved team/role names, team-level summaries (avg utilization, headcount) |
+| `get_project_overview` | Projects with budget vs actual spend, resolved client/team/people names, pricing model labels |
+| `get_capacity_forecast` | Weekly capacity buckets with leave integration, resolved team names, availability windows |
+| `get_person_details` | Full profile with resolved skill names, role names, team name, current assignments |
+| `search_resources` | Search people/projects/clients by name |
 
 ## Installation
 
