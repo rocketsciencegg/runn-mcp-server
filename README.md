@@ -14,8 +14,10 @@ MCP server for Runn — resource planning and utilization tracking.
 
 ## Installation
 
+No install needed — runs directly via `npx`:
+
 ```bash
-npm install -g github:rocketsciencegg/runn-mcp-server
+npx -y github:rocketsciencegg/runn-mcp-server
 ```
 
 ## Configuration
@@ -28,7 +30,8 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 {
   "mcpServers": {
     "runn": {
-      "command": "runn-mcp-server",
+      "command": "npx",
+      "args": ["-y", "github:rocketsciencegg/runn-mcp-server"],
       "env": {
         "RUNN_API_KEY": "your-api-key"
       }
@@ -45,7 +48,8 @@ Add to your project's `.mcp.json`:
 {
   "mcpServers": {
     "runn": {
-      "command": "runn-mcp-server",
+      "command": "npx",
+      "args": ["-y", "github:rocketsciencegg/runn-mcp-server"],
       "env": {
         "RUNN_API_KEY": "${RUNN_API_KEY}"
       }
