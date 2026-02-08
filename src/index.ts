@@ -4,6 +4,15 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { DefaultApi, Configuration } from "runn-typescript-sdk";
+import {
+  computeUtilization,
+  enrichProjectOverview,
+  computeCapacityForecast,
+  enrichPersonDetails,
+  buildSkillMap,
+  buildRoleMap,
+  buildTeamMap,
+} from "./helpers.js";
 
 const server = new McpServer({
   name: "runn-mcp-server",
@@ -43,13 +52,76 @@ function errorResult(toolName: string, err: unknown) {
   };
 }
 
+// --- Shared data fetchers ---
+
+async function fetchPeople(includePlaceholders = false) {
+  return paginate(async (cursor) => {
+    const resp = await api.listPeople({ acceptVersion: V, limit: 100, cursor, includePlaceholders });
+    return resp.data as any;
+  });
+}
+
+async function fetchAssignments(personId?: number) {
+  return paginate(async (cursor) => {
+    const resp = await api.listAssignments({ acceptVersion: V, limit: 100, cursor, ...(personId ? { personId } : {}) });
+    return resp.data as any;
+  });
+}
+
+async function fetchProjects(includeArchived = false, name?: string) {
+  return paginate(async (cursor) => {
+    const resp = await api.listProjects({ acceptVersion: V, limit: 100, cursor, includeArchived, ...(name ? { name } : {}) });
+    return resp.data as any;
+  });
+}
+
+async function fetchClients() {
+  return paginate(async (cursor) => {
+    const resp = await api.listClients({ acceptVersion: V, sortBy: "createdAt", limit: 100, cursor });
+    return resp.data as any;
+  });
+}
+
+async function fetchTeams() {
+  const resp = await api.listTeams({ acceptVersion: V, limit: 100 });
+  return (resp.data as any)?.values || [];
+}
+
+async function fetchRoles() {
+  const resp = await api.listRoles({ acceptVersion: V, limit: 100 });
+  return (resp.data as any)?.values || [];
+}
+
+async function fetchSkills() {
+  const resp = await api.listSkills({ acceptVersion: V, sortBy: "id", limit: 100 });
+  return (resp.data as any)?.values || [];
+}
+
+async function fetchActuals(minDate?: string, maxDate?: string) {
+  return paginate(async (cursor) => {
+    const resp = await api.listActuals({
+      acceptVersion: V, limit: 100, cursor,
+      ...(minDate ? { minDate } : {}),
+      ...(maxDate ? { maxDate } : {}),
+    });
+    return resp.data as any;
+  });
+}
+
+async function fetchLeave() {
+  return paginate(async (cursor) => {
+    const resp = await api.listLeaveTimeOffs({ acceptVersion: V, sortBy: "createdAt", limit: 100, cursor });
+    return resp.data as any;
+  });
+}
+
 // --- TOOLS ---
 
 server.registerTool(
   "get_team_utilization",
   {
     description:
-      "Get current utilization data for people and teams. Returns each person with their active assignments and billable hours. Optionally filter by team name.",
+      "Get utilization data with actual billable vs available hours. Resolves team and role names. Includes team-level summaries with avg utilization and headcount. Optionally filter by team name.",
     inputSchema: {
       teamName: z.string().optional().describe("Filter by team name (case-insensitive partial match)"),
       includePlaceholders: z.boolean().optional().describe("Include placeholder people (default: false)"),
@@ -57,66 +129,29 @@ server.registerTool(
   },
   async ({ teamName, includePlaceholders }) => {
     try {
-      const people = await paginate(async (cursor) => {
-        const resp = await api.listPeople({
-          acceptVersion: V, limit: 100, cursor,
-          includePlaceholders: includePlaceholders ?? false,
-        });
-        return resp.data as any;
+      // Fetch actuals for the last ~20 working days
+      const now = new Date();
+      const monthAgo = new Date(now);
+      monthAgo.setDate(monthAgo.getDate() - 30);
+      const minDate = monthAgo.toISOString().slice(0, 10);
+      const maxDate = now.toISOString().slice(0, 10);
+
+      const [people, assignments, actuals, teams, roles] = await Promise.all([
+        fetchPeople(includePlaceholders ?? false),
+        fetchAssignments(),
+        fetchActuals(minDate, maxDate),
+        fetchTeams(),
+        fetchRoles(),
+      ]);
+
+      const result = computeUtilization({
+        people, assignments, actuals, teams, roles,
+        teamNameFilter: teamName,
+        dateRangeDays: 20,
       });
-
-      const assignments = await paginate(async (cursor) => {
-        const resp = await api.listAssignments({ acceptVersion: V, limit: 100, cursor });
-        return resp.data as any;
-      });
-
-      // Filter by team if requested
-      let teamIds: Set<number> | null = null;
-      if (teamName) {
-        const teamsResp = await api.listTeams({ acceptVersion: V, limit: 100 });
-        const teams = (teamsResp.data as any)?.values || [];
-        const matching = teams.filter((t: any) =>
-          t.name?.toLowerCase().includes(teamName.trim().toLowerCase())
-        );
-        teamIds = new Set(matching.map((t: any) => t.id));
-      }
-
-      const assignmentsByPerson = new Map<number, any[]>();
-      for (const a of assignments) {
-        const pid = (a as any).personId;
-        if (!assignmentsByPerson.has(pid)) assignmentsByPerson.set(pid, []);
-        assignmentsByPerson.get(pid)!.push(a);
-      }
-
-      let filteredPeople = people;
-      if (teamIds) {
-        filteredPeople = people.filter((p: any) => {
-          const pTeams = p.teamIds || (p.teamId ? [p.teamId] : []);
-          return pTeams.some((id: number) => teamIds!.has(id));
-        });
-      }
-
-      const result = filteredPeople.map((p: any) => ({
-        id: p.id,
-        name: `${p.firstName || ""} ${p.lastName || ""}`.trim(),
-        email: p.email,
-        role: p.role,
-        teamIds: p.teamIds || [],
-        activeAssignments: (assignmentsByPerson.get(p.id) || []).length,
-        assignments: (assignmentsByPerson.get(p.id) || []).map((a: any) => ({
-          projectId: a.projectId,
-          roleId: a.roleId,
-          startDate: a.startDate,
-          endDate: a.endDate,
-          minutesPerDay: a.minutesPerDay,
-        })),
-      }));
 
       return {
-        content: [{
-          type: "text" as const,
-          text: JSON.stringify({ totalPeople: result.length, people: result }, null, 2),
-        }],
+        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
       };
     } catch (err) {
       return errorResult("get_team_utilization", err);
@@ -128,7 +163,7 @@ server.registerTool(
   "get_project_overview",
   {
     description:
-      "Get overview of active projects with assignments, timelines, and client info. Optionally filter by project name.",
+      "Get overview of active projects with resolved client/team names, assigned people with roles, pricing model labels, and budget vs actual spend. Optionally filter by project name.",
     inputSchema: {
       name: z.string().optional().describe("Filter by project name"),
       includeArchived: z.boolean().optional().describe("Include archived projects (default: false)"),
@@ -136,49 +171,26 @@ server.registerTool(
   },
   async ({ name, includeArchived }) => {
     try {
-      const projects = await paginate(async (cursor) => {
-        const resp = await api.listProjects({
-          acceptVersion: V, limit: 100, cursor,
-          includeArchived: includeArchived ?? false, name,
-        });
-        return resp.data as any;
-      });
+      const now = new Date();
+      const threeMonthsAgo = new Date(now);
+      threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
 
-      const clients = await paginate(async (cursor) => {
-        const resp = await api.listClients({ acceptVersion: V, sortBy: "createdAt", limit: 100, cursor });
-        return resp.data as any;
-      });
-      const clientMap = new Map(clients.map((c: any) => [c.id, c]));
+      const [projects, assignments, actuals, clients, teams, people, roles] = await Promise.all([
+        fetchProjects(includeArchived ?? false, name),
+        fetchAssignments(),
+        fetchActuals(threeMonthsAgo.toISOString().slice(0, 10), now.toISOString().slice(0, 10)),
+        fetchClients(),
+        fetchTeams(),
+        fetchPeople(),
+        fetchRoles(),
+      ]);
 
-      const assignments = await paginate(async (cursor) => {
-        const resp = await api.listAssignments({ acceptVersion: V, limit: 100, cursor });
-        return resp.data as any;
+      const result = enrichProjectOverview({
+        projects, assignments, actuals, clients, teams, people, roles,
       });
-      const assignmentsByProject = new Map<number, any[]>();
-      for (const a of assignments) {
-        const pid = (a as any).projectId;
-        if (!assignmentsByProject.has(pid)) assignmentsByProject.set(pid, []);
-        assignmentsByProject.get(pid)!.push(a);
-      }
-
-      const result = projects.map((p: any) => ({
-        id: p.id,
-        name: p.name,
-        client: (clientMap.get(p.clientId) as any)?.name || null,
-        startDate: p.startDate,
-        endDate: p.endDate,
-        isConfirmed: p.isConfirmed,
-        isTentative: p.isTentative,
-        tags: p.tags,
-        assignmentCount: (assignmentsByProject.get(p.id) || []).length,
-        assignedPeople: [...new Set((assignmentsByProject.get(p.id) || []).map((a: any) => a.personId))],
-      }));
 
       return {
-        content: [{
-          type: "text" as const,
-          text: JSON.stringify({ totalProjects: result.length, projects: result }, null, 2),
-        }],
+        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
       };
     } catch (err) {
       return errorResult("get_project_overview", err);
@@ -190,80 +202,28 @@ server.registerTool(
   "get_capacity_forecast",
   {
     description:
-      "Get capacity forecast showing who is available and when projects end. Identifies staffing gaps and upcoming availability.",
+      "Get capacity forecast with weekly utilization buckets, leave data, team names resolved. Shows who is available when and upcoming staffing gaps.",
     inputSchema: {
       weeksAhead: z.number().optional().describe("How many weeks ahead to forecast (default: 8)"),
     },
   },
   async ({ weeksAhead }) => {
     try {
-      const weeks = weeksAhead ?? 8;
+      const [people, assignments, projects, leave, teams] = await Promise.all([
+        fetchPeople(),
+        fetchAssignments(),
+        fetchProjects(),
+        fetchLeave(),
+        fetchTeams(),
+      ]);
 
-      const people = await paginate(async (cursor) => {
-        const resp = await api.listPeople({
-          acceptVersion: V, limit: 100, cursor, includePlaceholders: false,
-        });
-        return resp.data as any;
+      const result = computeCapacityForecast({
+        people, assignments, projects, leave, teams,
+        weeksAhead: weeksAhead ?? 8,
       });
-
-      const assignments = await paginate(async (cursor) => {
-        const resp = await api.listAssignments({ acceptVersion: V, limit: 100, cursor });
-        return resp.data as any;
-      });
-
-      const projects = await paginate(async (cursor) => {
-        const resp = await api.listProjects({
-          acceptVersion: V, limit: 100, cursor, includeArchived: false,
-        });
-        return resp.data as any;
-      });
-      const projectMap = new Map(projects.map((p: any) => [p.id, p]));
-
-      const now = new Date();
-      const forecastEnd = new Date(now);
-      forecastEnd.setDate(forecastEnd.getDate() + weeks * 7);
-
-      const forecast = people.map((p: any) => {
-        const personAssignments = assignments
-          .filter((a: any) => a.personId === p.id)
-          .map((a: any) => ({
-            projectName: (projectMap.get(a.projectId) as any)?.name || `Project ${a.projectId}`,
-            startDate: a.startDate,
-            endDate: a.endDate,
-            minutesPerDay: a.minutesPerDay,
-          }))
-          .filter((a: any) => !a.endDate || new Date(a.endDate) >= now);
-
-        const endingSoon = personAssignments.filter(
-          (a: any) => a.endDate && new Date(a.endDate) <= forecastEnd
-        );
-
-        return {
-          name: `${p.firstName || ""} ${p.lastName || ""}`.trim(),
-          id: p.id,
-          activeAssignments: personAssignments.length,
-          endingSoon,
-          fullyAvailableAfter: endingSoon.length > 0
-            ? endingSoon.reduce((latest: string, a: any) => (a.endDate > latest ? a.endDate : latest), endingSoon[0].endDate)
-            : null,
-        };
-      });
-
-      const unassigned = forecast.filter((p) => p.activeAssignments === 0);
-      const ending = forecast.filter((p) => p.endingSoon.length > 0);
 
       return {
-        content: [{
-          type: "text" as const,
-          text: JSON.stringify({
-            forecastWeeks: weeks,
-            totalPeople: forecast.length,
-            currentlyUnassigned: unassigned.length,
-            withEndingSoonAssignments: ending.length,
-            unassignedPeople: unassigned.map((p) => p.name),
-            forecast,
-          }, null, 2),
-        }],
+        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
       };
     } catch (err) {
       return errorResult("get_capacity_forecast", err);
@@ -275,47 +235,35 @@ server.registerTool(
   "get_person_details",
   {
     description:
-      "Get detailed information about a specific person including their assignments and skills.",
+      "Get detailed information about a person with resolved skill names, role names on assignments, and team name.",
     inputSchema: {
       personId: z.number().describe("The Runn person ID"),
     },
   },
   async ({ personId }) => {
     try {
-      const personResp = await api.getPerson({ acceptVersion: V, personId });
+      const [personResp, skillsResp, assignments, projects, allSkills, roles, teams] = await Promise.all([
+        api.getPerson({ acceptVersion: V, personId }),
+        api.listPersonSkills({ acceptVersion: V, personId, limit: 50 }),
+        fetchAssignments(personId),
+        fetchProjects(),
+        fetchSkills(),
+        fetchRoles(),
+        fetchTeams(),
+      ]);
 
-      const skillsResp = await api.listPersonSkills({
-        acceptVersion: V, personId, limit: 50,
+      const person = personResp.data;
+      const personSkills = (skillsResp.data as any)?.values || [];
+
+      const result = enrichPersonDetails({
+        person,
+        personSkills,
+        assignments,
+        projects,
+        skillMap: buildSkillMap(allSkills),
+        roleMap: buildRoleMap(roles),
+        teamMap: buildTeamMap(teams),
       });
-      const skills = (skillsResp.data as any)?.values || [];
-
-      const assignments = await paginate(async (cursor) => {
-        const resp = await api.listAssignments({
-          acceptVersion: V, limit: 100, cursor, personId,
-        });
-        return resp.data as any;
-      });
-
-      const projects = await paginate(async (cursor) => {
-        const resp = await api.listProjects({
-          acceptVersion: V, limit: 100, cursor, includeArchived: false,
-        });
-        return resp.data as any;
-      });
-      const projectMap = new Map(projects.map((p: any) => [p.id, p]));
-
-      const result = {
-        ...(personResp.data as any),
-        skills: skills.map((s: any) => ({ id: s.skillId, level: s.level })),
-        assignments: assignments.map((a: any) => ({
-          projectName: (projectMap.get(a.projectId) as any)?.name || `Project ${a.projectId}`,
-          projectId: a.projectId,
-          startDate: a.startDate,
-          endDate: a.endDate,
-          minutesPerDay: a.minutesPerDay,
-          roleId: a.roleId,
-        })),
-      };
 
       return {
         content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
@@ -344,12 +292,7 @@ server.registerTool(
       const results: Record<string, any[]> = {};
 
       if (type === "all" || type === "people") {
-        const people = await paginate(async (cursor) => {
-          const resp = await api.listPeople({
-            acceptVersion: V, limit: 100, cursor, includePlaceholders: false,
-          });
-          return resp.data as any;
-        });
+        const people = await fetchPeople();
         results.people = people
           .filter((p: any) => {
             const name = `${p.firstName || ""} ${p.lastName || ""}`.toLowerCase();
@@ -359,22 +302,14 @@ server.registerTool(
       }
 
       if (type === "all" || type === "projects") {
-        const projects = await paginate(async (cursor) => {
-          const resp = await api.listProjects({
-            acceptVersion: V, limit: 100, cursor, includeArchived: false,
-          });
-          return resp.data as any;
-        });
+        const projects = await fetchProjects();
         results.projects = projects
           .filter((p: any) => p.name?.toLowerCase().includes(q))
           .map((p: any) => ({ id: p.id, name: p.name, startDate: p.startDate, endDate: p.endDate }));
       }
 
       if (type === "all" || type === "clients") {
-        const clients = await paginate(async (cursor) => {
-          const resp = await api.listClients({ acceptVersion: V, sortBy: "createdAt", limit: 100, cursor });
-          return resp.data as any;
-        });
+        const clients = await fetchClients();
         results.clients = clients
           .filter((c: any) => c.name?.toLowerCase().includes(q))
           .map((c: any) => ({ id: c.id, name: c.name }));
