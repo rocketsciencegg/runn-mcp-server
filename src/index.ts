@@ -8,7 +8,10 @@ import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import type { Request, Response } from "express";
 import { z } from "zod";
+import axios from "axios";
 import { DefaultApi, Configuration } from "runn-typescript-sdk";
+
+axios.defaults.adapter = "fetch";
 import {
   computeUtilization,
   enrichProjectOverview,
@@ -27,6 +30,23 @@ const api = new DefaultApi(config);
 // Every Runn API call requires acceptVersion
 const V = "1.0.0" as const;
 
+// Retry wrapper for 429 / 5xx responses
+async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn();
+    } catch (err: any) {
+      const status = err?.response?.status ?? err?.status;
+      const retryable = status === 429 || (status >= 500 && status < 600);
+      if (!retryable || attempt >= maxRetries) throw err;
+
+      const retryAfter = err?.response?.headers?.["retry-after"];
+      const delaySec = retryAfter ? parseFloat(retryAfter) : Math.pow(2, attempt);
+      await new Promise((r) => setTimeout(r, delaySec * 1000));
+    }
+  }
+}
+
 // Paginate through all results
 async function paginate<T>(
   fetcher: (cursor?: string) => Promise<{ values: T[]; nextCursor?: string }>
@@ -35,7 +55,7 @@ async function paginate<T>(
   let cursor: string | undefined;
   let pages = 0;
   do {
-    const result = await fetcher(cursor);
+    const result = await withRetry(() => fetcher(cursor));
     all.push(...(result.values || []));
     cursor = result.nextCursor;
     pages++;
@@ -120,7 +140,7 @@ async function fetchLeave() {
 function createServer() {
 const server = new McpServer({
   name: "runn-mcp-server",
-  version: "2.0.0",
+  version: "2.1.0",
 });
 
 server.registerTool(
@@ -169,20 +189,24 @@ server.registerTool(
   "get_project_overview",
   {
     description:
-      "Get overview of active projects with resolved client/team names, assigned people with roles, pricing model labels, and budget vs actual spend. Optionally filter by project name.",
+      "Get overview of projects with resolved client/team names, assigned people with roles, pricing model labels, and budget vs actual spend. Defaults to active (confirmed) projects. Optionally filter by project name or status.",
     inputSchema: {
       name: z.string().optional().describe("Filter by project name"),
-      includeArchived: z.boolean().optional().describe("Include archived projects (default: false)"),
+      status: z.enum(["active", "tentative", "archived", "all"]).optional()
+        .describe("Filter by project status (default: active). 'active' = confirmed, 'tentative' = unconfirmed, 'all' = everything"),
     },
   },
-  async ({ name, includeArchived }) => {
+  async ({ name, status }) => {
     try {
+      const statusFilter = status ?? "active";
+      const includeArchived = statusFilter === "archived" || statusFilter === "all";
+
       const now = new Date();
       const threeMonthsAgo = new Date(now);
       threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
 
-      const [projects, assignments, actuals, clients, teams, people, roles] = await Promise.all([
-        fetchProjects(includeArchived ?? false, name),
+      const [allProjects, assignments, actuals, clients, teams, people, roles] = await Promise.all([
+        fetchProjects(includeArchived, name),
         fetchAssignments(),
         fetchActuals(threeMonthsAgo.toISOString().slice(0, 10), now.toISOString().slice(0, 10)),
         fetchClients(),
@@ -190,6 +214,15 @@ server.registerTool(
         fetchPeople(),
         fetchRoles(),
       ]);
+
+      let projects = allProjects;
+      if (statusFilter === "active") {
+        projects = allProjects.filter((p: any) => p.isConfirmed === true);
+      } else if (statusFilter === "tentative") {
+        projects = allProjects.filter((p: any) => p.isConfirmed !== true);
+      } else if (statusFilter === "archived") {
+        projects = allProjects.filter((p: any) => p.isArchived === true);
+      }
 
       const result = enrichProjectOverview({
         projects, assignments, actuals, clients, teams, people, roles,
@@ -249,8 +282,8 @@ server.registerTool(
   async ({ personId }) => {
     try {
       const [personResp, skillsResp, assignments, projects, allSkills, roles, teams] = await Promise.all([
-        api.getPerson({ acceptVersion: V, personId }),
-        api.listPersonSkills({ acceptVersion: V, personId, limit: 50 }),
+        withRetry(() => api.getPerson({ acceptVersion: V, personId })),
+        withRetry(() => api.listPersonSkills({ acceptVersion: V, personId, limit: 50 })),
         fetchAssignments(personId),
         fetchProjects(),
         fetchSkills(),

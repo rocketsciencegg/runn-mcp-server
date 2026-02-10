@@ -10,7 +10,7 @@ MCP server for Runn — resource planning and utilization tracking.
 | Tool | Description |
 |------|-------------|
 | `get_team_utilization` | Actual utilization % from timesheet data, resolved team/role names, team-level summaries (avg utilization, headcount) |
-| `get_project_overview` | Projects with budget vs actual spend, resolved client/team/people names, pricing model labels |
+| `get_project_overview` | Projects with budget vs actual spend, resolved client/team/people names, pricing model labels. Filter by status: `active` (default), `tentative`, `archived`, or `all` |
 | `get_capacity_forecast` | Weekly capacity buckets with leave integration, resolved team names, availability windows |
 | `get_person_details` | Full profile with resolved skill names, role names, team name, current assignments |
 | `search_resources` | Search people/projects/clients by name |
@@ -34,7 +34,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
   "mcpServers": {
     "runn": {
       "command": "npx",
-      "args": ["-y", "github:rocketsciencegg/runn-mcp-server"],
+      "args": ["-y", "github:rocketsciencegg/runn-mcp-server#v2.1.0"],
       "env": {
         "RUNN_API_KEY": "your-api-key"
       }
@@ -52,7 +52,7 @@ Add to your project's `.mcp.json`:
   "mcpServers": {
     "runn": {
       "command": "npx",
-      "args": ["-y", "github:rocketsciencegg/runn-mcp-server"],
+      "args": ["-y", "github:rocketsciencegg/runn-mcp-server#v2.1.0"],
       "env": {
         "RUNN_API_KEY": "${RUNN_API_KEY}"
       }
@@ -66,6 +66,7 @@ Add to your project's `.mcp.json`:
 | Variable | Description |
 |----------|-------------|
 | `RUNN_API_KEY` | Your Runn API key |
+| `PORT` | (Optional) Set to run as an HTTP Streamable server instead of stdio |
 
 ## Development
 
@@ -74,7 +75,18 @@ git clone https://github.com/rocketsciencegg/runn-mcp-server.git
 cd runn-mcp-server
 npm install
 npm run build
+npm test
 ```
+
+### Integration tests
+
+Integration tests run against the live Runn API and require `RUNN_API_KEY`:
+
+```bash
+just integration
+```
+
+These are **not** run in CI (no API key available).
 
 ## License
 
