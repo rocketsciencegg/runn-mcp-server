@@ -27,7 +27,7 @@ check: build test
 
 # Integration test (requires RUNN_API_KEY, not run in CI)
 integration: build
-    node test-integration.mjs
+    node src/integration.test.mjs
 
 # Bump version (major, minor, or patch) across all files
 bump level="patch":
