@@ -190,10 +190,10 @@ export interface ProjectOverviewResult {
   }[];
 }
 
-const PRICING_MODELS: Record<number, string> = {
-  0: "Time & Materials",
-  1: "Fixed Price",
-  2: "Non-Billable",
+const PRICING_MODELS: Record<string, string> = {
+  tm: "Time & Materials",
+  fp: "Fixed Price",
+  nb: "Non-Billable",
 };
 
 export function enrichProjectOverview(opts: {

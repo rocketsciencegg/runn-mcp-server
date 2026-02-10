@@ -25,6 +25,22 @@ test:
 # Build and test
 check: build test
 
+# Integration test (requires RUNN_API_KEY, not run in CI)
+integration: build
+    node src/integration.test.mjs
+
+# Bump version (major, minor, or patch) across all files
+bump level="patch":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    new=$(npm version "{{level}}" --no-git-tag-version | tr -d 'v')
+    echo "Bumped to $new"
+    # src/index.ts — McpServer version
+    sed -i '' -E "s/version: \"[0-9]+\.[0-9]+\.[0-9]+\"/version: \"$new\"/" src/index.ts
+    # README.md — version tags in npx install URLs
+    sed -i '' -E "s/#v[0-9]+\.[0-9]+\.[0-9]+/#v$new/g" README.md
+    echo "Updated: package.json, src/index.ts, README.md → $new"
+
 # Clean build artifacts
 clean:
     rm -rf build coverage

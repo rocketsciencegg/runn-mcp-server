@@ -43,8 +43,8 @@ const mockClients = [
 ];
 
 const mockProjects = [
-  { id: 200, name: "Project Alpha", clientId: 50, teamId: 1, startDate: "2026-01-01", endDate: "2026-06-30", isConfirmed: true, isTentative: false, pricingModel: 0 },
-  { id: 201, name: "Project Beta", clientId: 51, teamId: 2, startDate: "2026-02-01", endDate: "2026-04-30", isConfirmed: false, isTentative: true, pricingModel: 1 },
+  { id: 200, name: "Project Alpha", clientId: 50, teamId: 1, startDate: "2026-01-01", endDate: "2026-06-30", isConfirmed: true, isTentative: false, pricingModel: "tm" },
+  { id: 201, name: "Project Beta", clientId: 51, teamId: 2, startDate: "2026-02-01", endDate: "2026-04-30", isConfirmed: false, isTentative: true, pricingModel: "fp" },
 ];
 
 const mockAssignments = [
