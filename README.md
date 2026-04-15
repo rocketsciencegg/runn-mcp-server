@@ -34,7 +34,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
   "mcpServers": {
     "runn": {
       "command": "npx",
-      "args": ["-y", "github:rocketsciencegg/runn-mcp-server#v2.1.0"],
+      "args": ["-y", "github:rocketsciencegg/runn-mcp-server#v2.1.1"],
       "env": {
         "RUNN_API_KEY": "your-api-key"
       }
@@ -52,7 +52,7 @@ Add to your project's `.mcp.json`:
   "mcpServers": {
     "runn": {
       "command": "npx",
-      "args": ["-y", "github:rocketsciencegg/runn-mcp-server#v2.1.0"],
+      "args": ["-y", "github:rocketsciencegg/runn-mcp-server#v2.1.1"],
       "env": {
         "RUNN_API_KEY": "${RUNN_API_KEY}"
       }
