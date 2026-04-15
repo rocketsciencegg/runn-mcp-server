@@ -140,7 +140,7 @@ async function fetchLeave() {
 function createServer() {
 const server = new McpServer({
   name: "runn-mcp-server",
-  version: "2.1.1",
+  version: "2.1.2",
 });
 
 server.registerTool(

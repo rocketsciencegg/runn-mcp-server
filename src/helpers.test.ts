@@ -280,8 +280,10 @@ describe("computeCapacityForecast", () => {
   });
 
   it("includes leave data", () => {
+    const leaveStart = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
+    const leaveEnd = new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10);
     const leave = [
-      { personId: 1, startDate: "2026-02-15", endDate: "2026-02-20", leaveType: "PTO" },
+      { personId: 1, startDate: leaveStart, endDate: leaveEnd, leaveType: "PTO" },
     ];
     const result = computeCapacityForecast({
       people: mockPeople, assignments: mockAssignments,
@@ -307,9 +309,12 @@ describe("computeCapacityForecast", () => {
   });
 
   it("identifies unassigned people", () => {
+    // Use future end-dates so mockAssignments remain "active" regardless of when tests run
+    const farFuture = new Date(Date.now() + 365 * 86400000).toISOString().slice(0, 10);
+    const activeAssignments = mockAssignments.map((a) => ({ ...a, endDate: farFuture }));
     const result = computeCapacityForecast({
       people: [...mockPeople, { id: 99, firstName: "New", lastName: "Hire", teamId: 1 }],
-      assignments: mockAssignments,
+      assignments: activeAssignments,
       projects: mockProjects, leave: [], teams: mockTeams, weeksAhead: 4,
     });
     expect(result.currentlyUnassigned).toBe(1);
